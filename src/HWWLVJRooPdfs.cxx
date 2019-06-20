@@ -6,16 +6,19 @@
 
 #include "Riostream.h" 
 
-#include "../interface/HWWLVJRooPdfs.h"
+//#include "../interface/HWWLVJRooPdfs.h"
+#include "HWWLVJRooPdfs.h"
 #include "RooAbsReal.h" 
 #include "RooAbsCategory.h" 
 #include "RooExponential.h" 
 #include <math.h> 
-#include "TMath.h" 
+#include "TMath.h"
+#include "sf_hyperg.h" //not in the new version
 
 #include <algorithm>
 #include <vector>
 #include <string>
+#include <sstream>
 
 #include "RooPlot.h"
 #include "TFile.h"
@@ -50,9 +53,40 @@
 #include "TGraph.h"
 #include "TGraphAsymmErrors.h"
 #include <iostream>
+#include <limits>
 using namespace std;
 
 void HWWLVJRooPdfs(){}
+
+//// Erf*Exp function implementation for W+Jets
+Double_t ErfExpDeco(Double_t x, Double_t c, Double_t offset, Double_t width){
+    if(width<1e-2)width=1e-2;
+    if (c==0)c=-1e-7;
+    if(TMath::Exp(-(x-offset)/(width+c))*(1.+TMath::Erf((x-offset)/(width-c)))==0) return std::numeric_limits<double>::min()*1e50;
+    //else if(isnan(TMath::Exp(-(x-offset)/(width+c))*(1.+TMath::Erf((x-offset)/(width-c))))) return std::numeric_limits<double>::max()/1e50;
+    //else if(isnan(TMath::Exp(-(x-offset)/(width+c))*(1.+TMath::Erf((x-offset)/(width-c))))) std::cout<<"NAN"<<std::endl;
+    //else if(TMath::Exp(-(x-offset)/(width+c))*(1.+TMath::Erf((x-offset)/(width-c)))==0) std::cout<<"ZERO"<<std::endl;
+    return TMath::Exp(-(x-offset)/(width+c))*(1.+TMath::Erf((x-offset)/(width-c)))/2. ;
+}
+
+Double_t ErfExpDeco(Double_t x, Double_t x_min, Double_t x_max, Double_t c, Double_t offset, Double_t width){
+    if(width<1e-2)width=1e-2;
+    if (c==0)c=1e-7;
+    double minTerm = (TMath::Exp(c*c*width*width/4+c*offset) * 
+		      TMath::Erf((2*x_min-c*width*width-
+				  2*offset)/2/width) - 
+		      TMath::Exp(c*x_min) * 
+		      TMath::Erf((x_min-offset)/width) - 
+		      TMath::Exp(c*x_min))/-2/c;
+    double maxTerm = (TMath::Exp(c*c*width*width/4+c*offset) * 
+		      TMath::Erf((2*x_max-c*width*width-
+				  2*offset)/2/width) - 
+		      TMath::Exp(c*x_max) * 
+		      TMath::Erf((x_max-offset)/width) - 
+		      TMath::Exp(c*x_max))/-2/c;
+    Double_t integral=(maxTerm-minTerm) ;
+    return TMath::Exp(c*x)*(1.+TMath::Erf((x-offset)/width))/2./integral ;
+}
 
 //// Erf*Exp function implementation 
 Double_t ErfExp(Double_t x, Double_t c, Double_t offset, Double_t width){
@@ -95,6 +129,176 @@ Double_t Exp(Double_t x, Double_t x_min, Double_t x_max, Double_t c){
 	return TMath::Exp(c*x)/integral ;
 }
 
+//================================================================================================================================================================================
+//// Poly3 pdf
+//// Standardised Bernstein polynomial of degree 3 for W+Jets
+//
+ClassImp(RooPoly3Pdf)
+RooPoly3Pdf::RooPoly3Pdf(const char *name, const char *title, 
+					RooAbsReal& _x,
+					RooAbsReal& _b0,
+					RooAbsReal& _b1,
+					RooAbsReal& _b2,
+					RooAbsReal& _b3):
+    			                RooAbsPdf(name,title), 
+ 			                x("x","x",this,_x),
+			                b0("b0","b0",this,_b0),
+			                b1("b1","b1",this,_b1),
+					b2("b2","b2",this,_b2),
+					b3("b3","b3",this,_b3){}
+
+RooPoly3Pdf::RooPoly3Pdf(const RooPoly3Pdf& other, const char* name):
+					RooAbsPdf(other,name),
+					x("x",this,other.x),
+                                        b0("b0",this,other.b0),
+                                        b1("b1",this,other.b1),
+                                        b2("b2",this,other.b2),
+                                        b3("b3",this,other.b3){}
+
+Double_t RooPoly3Pdf::evaluate() const { 
+
+	Double_t y=(x-40.)/110.;
+	return (b0*TMath::Power(1-y,3)) + (b1*y*TMath::Power(1-y,2)) + (b2*TMath::Power(y,2)*(1-y)) + (b3*TMath::Power(y,3));
+}
+
+Int_t RooPoly3Pdf::getAnalyticalIntegral(RooArgSet& allVars, RooArgSet& analVars, const char* /*rangeName*/) const { 
+	if (matchArgs(allVars,analVars,x)) return 1 ; 
+	return 0 ; 
+}
+
+Double_t RooPoly3Pdf::analyticalIntegral(Int_t code, const char* rangeName) const {
+
+	if (code==1) {
+		Double_t minTerm=0;
+		Double_t maxTerm=0;
+		Double_t yMin=(x.min(rangeName)-40.)/110.;
+		Double_t yMax=(x.max(rangeName)-40.)/110.;
+
+		minTerm=110.0 * ( (b1+b3-b0-b2)*TMath::Power(yMin,4)/4 + (b0-(2*b1/3)+(b2/3))*TMath::Power(yMin,3) + ((b1/2)-(3*b0/2))*TMath::Power(yMin,2) + (b0)*(yMin) );
+		maxTerm=110.0 * ( (b1+b3-b0-b2)*TMath::Power(yMax,4)/4 + (b0-(2*b1/3)+(b2/3))*TMath::Power(yMax,3) + ((b1/2)-(3*b0/2))*TMath::Power(yMax,2) + (b0)*(yMax) );
+		return (maxTerm-minTerm);
+	}
+	return 0;
+}
+
+//// ChiSq pdf
+//
+ClassImp(RooChiSqPdf)
+RooChiSqPdf::RooChiSqPdf(const char *name, const char *title,
+                                        RooAbsReal& _x,
+                                        RooAbsReal& _shift,
+                                        RooAbsReal& _c):
+                                        RooAbsPdf(name,title),
+                                        x("x","x",this,_x),
+                                        shift("shift","shift",this,_shift),
+                                        c("c","c",this,_c){}
+
+RooChiSqPdf::RooChiSqPdf(const RooChiSqPdf& other, const char* name):
+                                        RooAbsPdf(other,name),
+                                        x("x",this,other.x),
+                                        shift("shift",this,other.shift),
+                                        c("c",this,other.c){}
+
+Double_t RooChiSqPdf::evaluate() const {
+
+        return (x-shift)*TMath::Exp(c*(x-shift));
+}
+
+Int_t RooChiSqPdf::getAnalyticalIntegral(RooArgSet& allVars, RooArgSet& analVars, const char* /*rangeName*/) const {
+        if (matchArgs(allVars,analVars,x)) return 1 ;
+        return 0 ;
+}
+
+Double_t RooChiSqPdf::analyticalIntegral(Int_t code, const char* rangeName) const {
+
+        if (code==1) {
+                Double_t minTerm=0;
+                Double_t maxTerm=0;
+
+                minTerm= TMath::Exp(c*(x.min(rangeName)-shift)) * ((c*x.min(rangeName))-(shift*c)-1) / (c*c);
+		maxTerm= TMath::Exp(c*(x.max(rangeName)-shift)) * ((c*x.max(rangeName))-(shift*c)-1) / (c*c);
+                return (maxTerm-minTerm);
+        }
+        return 0;
+}
+//// Erf*Exp pdf 
+ClassImp(RooErfExpDecoPdf) 
+
+RooErfExpDecoPdf::RooErfExpDecoPdf(const char *name, const char *title, 
+					RooAbsReal& _x,
+					RooAbsReal& _c,
+					RooAbsReal& _offset,
+					RooAbsReal& _width) :
+    			                RooAbsPdf(name,title), 
+ 			                x("x","x",this,_x),
+			                c("c","c",this,_c),
+			                offset("offset","offset",this,_offset),
+			                width("width","width",this,_width){ } 
+
+
+RooErfExpDecoPdf::RooErfExpDecoPdf(const RooErfExpDecoPdf& other, const char* name) :  
+	RooAbsPdf(other,name), 
+	x("x",this,other.x),
+	c("c",this,other.c),
+	offset("offset",this,other.offset),
+	width("width",this,other.width){}
+
+
+
+Double_t RooErfExpDecoPdf::evaluate() const { 
+
+    Double_t width_tmp=width; if(width<1e-2){ width_tmp=1e-2;}
+    return ErfExpDeco(x,c,offset,width_tmp) ; 
+} 
+
+Int_t RooErfExpDecoPdf::getAnalyticalIntegral(RooArgSet& allVars, RooArgSet& analVars, const char* /*rangeName*/) const  { 
+	if (matchArgs(allVars,analVars,x)) return 1 ; 
+	return 0 ; 
+} 
+
+Double_t RooErfExpDecoPdf::analyticalIntegral(Int_t code, const char* rangeName) const  { 
+
+  if (code==1) {
+    Double_t minTerm=0;
+    Double_t maxTerm=0;
+    
+    double exps = width+c;
+    double erfs = width-c;
+
+    minTerm = 0.5*exps * (
+			  TMath::Exp(erfs*erfs/(exps*exps)/4.) *
+			  TMath::Erf((2.*exps*(x.min(rangeName)-offset)/erfs + erfs )/2./exps) -
+			  
+			  TMath::Exp((offset-x.min(rangeName))/exps)*
+			  TMath::Erf((x.min(rangeName)-offset)/erfs) -
+			  
+			  TMath::Exp((offset-x.min(rangeName))/exps)
+			  
+			   );
+    
+    maxTerm = 0.5*exps * (
+			  TMath::Exp(erfs*erfs/(exps*exps)/4.) *
+			  TMath::Erf((2.*exps*(x.max(rangeName)-offset)/erfs + erfs )/2./exps) -
+			  
+			  TMath::Exp((offset-x.max(rangeName))/exps)*
+			  TMath::Erf((x.max(rangeName)-offset)/erfs) -
+			  
+			  TMath::Exp((offset-x.max(rangeName))/exps)
+			  
+			  );
+
+    ostringstream streamRes;
+    streamRes << maxTerm-minTerm;
+    //cout<<(streamRes.str()=="-nan")<<endl;
+
+    if(maxTerm-minTerm==0) return std::numeric_limits<double>::min()*1e50;
+    else if(streamRes.str()=="nan") return std::numeric_limits<double>::max()/1e50;
+    else if(streamRes.str()=="-nan") return std::numeric_limits<double>::max()/1e50;
+    
+    return (maxTerm-minTerm) ;
+  } 
+  return 0 ; 
+} 
 
 //// Erf*Exp pdf 
 ClassImp(RooErfExpPdf) 
